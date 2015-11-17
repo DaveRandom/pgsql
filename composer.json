@@ -1,0 +1,23 @@
+{
+	"name": "amphp/pgsql",
+	"description": "Asynchronous PostgreSQL client built on the Amp concurrency framework",
+	"minimum-stability": "dev",
+	"require": {
+		"amphp/amp": "^1"
+	},
+	"licence": "MIT",
+	"authors": [
+		{
+			"name": "Daniel Lowrey",
+			"email": "rdlowrey@php.net"
+		}
+	],
+	"require-dev": {
+		"phpunit/phpunit": "~4.8"
+	},
+	"autoload": {
+		"psr-4": {
+			"Amp\\Pgsql\\": "lib/"
+		}
+	}
+}
