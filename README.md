@@ -17,7 +17,10 @@
 
 **Required PHP Extensions**
 
+At least one of:
+
 - `ext/pgsql`
+- `pecl/pq`
 
 This library relies on the pgsql extension shipped as part of standard PHP installs. No additional configuration is needed for most scenarios.
 

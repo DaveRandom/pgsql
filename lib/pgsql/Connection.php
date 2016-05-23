@@ -1,38 +1,47 @@
-<?php
+<?php declare(strict_types = 1);
 
-namespace Amp\Pgsql;
+namespace Amp\Pgsql\pgsql;
 
+use Amp\Pgsql\Connection as PgsqlConnection;
+use Amp\Pgsql\NotImplementedException;
+use Amp\Pgsql\OptionDefinitionFailureException;
+use Amp\Pgsql\ResetFailedException;
+use Amp\Pgsql\UnknownOptionException;
 use Amp\Promise;
 
-interface Connection
+class Connection implements PgsqlConnection
 {
-    const OPTION_ENCODING           = 1;
-    const OPTION_DEFAULT_FETCH_TYPE = 2;
-
-    const STATE_CLOSED     = 0;
-    const STATE_CONNECTING = 1;
-    const STATE_CONNECTED  = 2;
-
     /**
      * Indicates whether the connection to the server is currently open
      *
      * @return int
      */
-    public function getConnectionState(): int;
+    public function getConnectionState(): int
+    {
+        throw new NotImplementedException; // todo
+    }
 
     /**
      * Returns a list of the notification channels for which active subscriptions exist
      *
      * @return string[]
      */
-    public function getSubscribedChannels(): array;
+    public function getSubscribedChannels(): array
+    {
+        throw new NotImplementedException; // todo
+    }
 
     /**
      * Connect to the server
      *
+     * @param string $dsn todo check pq/pgsql compat
+     * @param array $options An array of options to apply before connecting
      * @return Promise<void>
      */
-    public function connect(): Promise;
+    public function connect(string $dsn, array $options = []): Promise
+    {
+        throw new NotImplementedException; // todo
+    }
 
     /**
      * Set an option on the connection
@@ -42,7 +51,10 @@ interface Connection
      * @throws UnknownOptionException
      * @throws OptionDefinitionFailureException
      */
-    public function setOption(int $option, /* mixed */ $value) /* : void */;
+    public function setOption(int $option, /* mixed */ $value) /* : void */
+    {
+        throw new NotImplementedException; // todo
+    }
 
     /**
      * Get the current value of a connection option
@@ -52,7 +64,10 @@ interface Connection
      * @throws OptionDefinitionFailureException
      * @return mixed
      */
-    public function getOption(int $option) /* : mixed */;
+    public function getOption(int $option) /* : mixed */
+    {
+        throw new NotImplementedException; // todo
+    }
 
     /**
      * Execute an SQL query (one that returns a result set) and return a cursor
@@ -64,7 +79,10 @@ interface Connection
      * @param array $types
      * @return Promise<Cursor>
      */
-    public function executeQuery(string $sql, array $params = null, array $types = null): Promise;
+    public function executeQuery(string $sql, array $params = null, array $types = null): Promise
+    {
+        throw new NotImplementedException; // todo
+    }
 
     /**
      * Execute an SQL command (one that does not return a result set) and return the number of effected rows
@@ -76,7 +94,10 @@ interface Connection
      * @param array $types
      * @return Promise<int>
      */
-    public function executeCommand(string $sql, array $params = null, array $types = null): Promise;
+    public function executeCommand(string $sql, array $params = null, array $types = null): Promise
+    {
+        throw new NotImplementedException; // todo
+    }
 
     /**
      * Register a callback to be invoked when a notification is received on the named channel
@@ -85,7 +106,10 @@ interface Connection
      * @param callable $callback function(string $message, int $pid): void
      * @return Promise<string> An identifier for the listener
      */
-    public function listen(string $channel, callable $callback): Promise;
+    public function listen(string $channel, callable $callback): Promise
+    {
+        throw new NotImplementedException; // todo
+    }
 
     /**
      * Send a notification message to the named channel
@@ -94,7 +118,10 @@ interface Connection
      * @param string $message
      * @return Promise<void>
      */
-    public function notify(string $channel, string $message): Promise;
+    public function notify(string $channel, string $message): Promise
+    {
+        throw new NotImplementedException; // todo
+    }
 
     /**
      * Prepare a statement for execution
@@ -104,7 +131,10 @@ interface Connection
      * @param array $types
      * @return Promise<Statement>
      */
-    public function prepare(string $name, string $sql, array $types = null): Promise;
+    public function prepare(string $name, string $sql, array $types = null): Promise
+    {
+        throw new NotImplementedException; // todo
+    }
 
     /**
      * Attempt to reset a possibly broken connection to a working state
@@ -114,22 +144,34 @@ interface Connection
      * @return Promise<void>
      * @throws ResetFailedException
      */
-    public function reset(): Promise;
+    public function reset(): Promise
+    {
+        throw new NotImplementedException; // todo
+    }
 
     /**
      * @param int $flags
      * @return Promise<void>
      */
-    public function beginTransaction(int $flags = 0): Promise;
+    public function beginTransaction(int $flags = 0): Promise
+    {
+        throw new NotImplementedException; // todo
+    }
 
     /**
      * @param string $subscriptionId The ID returned by listen()
      * @return Promise<void>
      */
-    public function unlisten(string $subscriptionId): Promise;
+    public function unlisten(string $subscriptionId): Promise
+    {
+        throw new NotImplementedException; // todo
+    }
 
     /**
      * Close the connection and free the underlying resources
      */
-    public function close() /* : void */;
+    public function close() /* : void */
+    {
+        throw new NotImplementedException; // todo
+    }
 }

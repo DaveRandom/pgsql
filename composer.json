@@ -2,18 +2,25 @@
 	"name": "amphp/pgsql",
 	"description": "Asynchronous PostgreSQL client built on the Amp concurrency framework",
 	"minimum-stability": "dev",
-	"require": {
-		"amphp/amp": "^1"
-	},
 	"licence": "MIT",
 	"authors": [
 		{
 			"name": "Daniel Lowrey",
 			"email": "rdlowrey@php.net"
+		},
+		{
+			"name": "Chris Wright",
+			"email": "daverandom@php.net"
 		}
 	],
+	"require": {
+		"php": "^7",
+		"amphp/amp": "^1.2",
+		"daverandom/mutex": "^0"
+	},
 	"require-dev": {
-		"phpunit/phpunit": "~4.8"
+		"phpunit/phpunit": "~4.8",
+		"daverandom/pecl-pq-stubs": "^0"
 	},
 	"autoload": {
 		"psr-4": {
