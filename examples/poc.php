@@ -15,7 +15,7 @@ require __DIR__ . '/config.php';
 
 \Amp\run(function() {
     /** @var Cursor $cur */
-    /** @var Statement $stmt */
+    /** @var QueryStatement $stmt */
 
     $conn = new pqConnection(sprintf('postgres://%s:%s@%s/%s', PGSQL_USER, PGSQL_PASS, PGSQL_HOST, PGSQL_DBNAME));
 
@@ -27,8 +27,8 @@ require __DIR__ . '/config.php';
     }
     $cur->close();
 
-    $stmt = yield $conn->prepare('test', "SELECT * FROM shared.companies WHERE id = $1 ORDER BY id ASC LIMIT 5");
-    $cur = yield $stmt->executeQuery([1]);
+    $stmt = yield $conn->prepareQuery('test', "SELECT * FROM shared.companies WHERE id = $1 ORDER BY id ASC LIMIT 5");
+    $cur = yield $stmt->execute([1]);
     while ($row = yield $cur->fetchRow()) {
         var_dump($row);
     }
