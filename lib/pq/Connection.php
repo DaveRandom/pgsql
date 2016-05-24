@@ -56,11 +56,6 @@ class Connection implements PgsqlConnection
     private $mutex;
 
     /**
-     * @var int
-     */
-    private $connectionState = self::STATE_CLOSED;
-
-    /**
      * @var callable[][]
      */
     private $subscribedChannels = [];
@@ -96,6 +91,20 @@ class Connection implements PgsqlConnection
     private $options = [
         self::OPTION_DEFAULT_FETCH_TYPE => PgsqlCursor::FETCH_ASSOC,
         self::OPTION_ENCODING => 'UTF8',
+    ];
+
+    /**
+     * @var int[]
+     */
+    private static $statusMap = [
+        pqConnection::STARTED           => self::STATE_STARTED,
+        pqConnection::MADE              => self::STATE_MADE,
+        pqConnection::SSL_STARTUP       => self::STATE_SSL_STARTUP,
+        pqConnection::AUTH_OK           => self::STATE_AUTH_OK,
+        pqConnection::SETENV            => self::STATE_SETENV,
+        pqConnection::AWAITING_RESPONSE => self::STATE_AWAITING_RESPONSE,
+        pqConnection::OK                => self::STATE_OK,
+        pqConnection::BAD               => self::STATE_BAD,
     ];
 
     /**
@@ -202,7 +211,7 @@ class Connection implements PgsqlConnection
 
     private function prepare(string $name, string $sql, array $types = null)
     {
-        if ($this->connectionState !== self::STATE_CONNECTED) {
+        if ($this->getConnectionState() !== self::STATE_OK) {
             throw new InvalidOperationException('Cannot execute commands before connection');
         }
 
@@ -295,7 +304,16 @@ class Connection implements PgsqlConnection
 
     public function getConnectionState(): int
     {
-        return $this->connectionState;
+        if (!isset($this->pqConnection)) {
+            return self::STATE_NONE;
+        }
+
+        assert(
+            isset(self::$statusMap[$this->pqConnection->status]),
+            new InternalLogicErrorException('Unknown connection status number ' . $this->pqConnection->status)
+        );
+
+        return self::$statusMap[$this->pqConnection->status];
     }
 
     public function getSubscribedChannels(): array
@@ -305,7 +323,7 @@ class Connection implements PgsqlConnection
 
     public function connect(): Promise
     {
-        if ($this->connectionState !== self::STATE_CLOSED) {
+        if (isset($this->pqConnection)) {
             throw new InvalidOperationException('Cannot connect: connection not closed');
         }
 
@@ -343,8 +361,6 @@ class Connection implements PgsqlConnection
             $deferred->succeed(self::IS_WRITABLE);
         }, ['enable' => false]);
 
-        $this->connectionState = self::STATE_CONNECTING;
-
         return resolve(function() {
             yield $this->awaitWritable();
 
@@ -367,7 +383,6 @@ class Connection implements PgsqlConnection
             }
 
             $this->pqConnection->encoding = $this->options[self::OPTION_ENCODING];
-            $this->connectionState = self::STATE_CONNECTED;
         });
     }
 
@@ -445,10 +460,6 @@ class Connection implements PgsqlConnection
 
     public function executeQuery(string $sql, array $params = null, array $types = null): Promise
     {
-        if ($this->connectionState !== self::STATE_CONNECTED) {
-            throw new InvalidOperationException('Cannot execute commands before connection');
-        }
-
         if ($params !== null) {
             $method = [$this->pqConnection, 'execParamsAsync'];
             $args = [$sql, $params, $types];
@@ -460,6 +471,10 @@ class Connection implements PgsqlConnection
         return resolve(function() use($method, $args) {
             /** @var Lock $lock */
             $lock = yield $this->mutex->getLock();
+
+            if ($this->getConnectionState() < self::STATE_OK) {
+                throw new InvalidOperationException('Cannot execute commands before connection');
+            }
 
             try {
                 yield from $this->callAsyncPqMethodAndAwaitResult($method, $args);
@@ -476,10 +491,6 @@ class Connection implements PgsqlConnection
 
     public function executeCommand(string $sql, array $params = null, array $types = null): Promise
     {
-        if ($this->connectionState !== self::STATE_CONNECTED) {
-            throw new InvalidOperationException('Cannot execute commands before connection');
-        }
-
         if ($params !== null) {
             $method = [$this->pqConnection, 'execParamsAsync'];
             $args = [$sql, $params, $types];
@@ -489,6 +500,10 @@ class Connection implements PgsqlConnection
         }
 
         return $this->mutex->withLock(function() use($method, $args) {
+            if ($this->getConnectionState() < self::STATE_OK) {
+                throw new InvalidOperationException('Cannot execute commands before connection');
+            }
+
             yield from $this->callAsyncPqMethodAndAwaitResult($method, $args);
 
             return $this->getResultAndThrowIfNotOK()->affectedRows;
@@ -516,10 +531,6 @@ class Connection implements PgsqlConnection
 
     public function listen(string $channel, callable $callback): Promise
     {
-        if ($this->connectionState !== self::STATE_CONNECTED) {
-            throw new InvalidOperationException('Cannot execute commands before connection');
-        }
-
         if (isset($this->subscribedChannels[$channel])) {
             return new Success($this->registerChannelSubscription($channel, $callback));
         }
@@ -528,6 +539,10 @@ class Connection implements PgsqlConnection
         $args = [$channel, $this->channelNotificationHandler];
 
         return $this->mutex->withLock(function() use($method, $args, $channel, $callback) {
+            if ($this->getConnectionState() < self::STATE_OK) {
+                throw new InvalidOperationException('Cannot execute commands before connection');
+            }
+
             yield from $this->callAsyncPqMethodAndAwaitResult($method, $args);
 
             $this->getResultAndThrowIfNotOK();
@@ -538,10 +553,6 @@ class Connection implements PgsqlConnection
 
     public function unlisten(string $subscriptionId): Promise
     {
-        if ($this->connectionState !== self::STATE_CONNECTED) {
-            throw new InvalidOperationException('Cannot execute commands before connection');
-        }
-
         if (!$channel = $this->unregisterChannelSubscription($subscriptionId)) {
             return new Success();
         }
@@ -550,6 +561,10 @@ class Connection implements PgsqlConnection
         $args = [$channel];
 
         return $this->mutex->withLock(function() use($method, $args, $channel) {
+            if ($this->getConnectionState() < self::STATE_OK) {
+                throw new InvalidOperationException('Cannot execute commands before connection');
+            }
+
             yield from $this->callAsyncPqMethodAndAwaitResult($method, $args);
 
             $this->getResultAndThrowIfNotOK();
@@ -558,14 +573,14 @@ class Connection implements PgsqlConnection
 
     public function notify(string $channel, string $message): Promise
     {
-        if ($this->connectionState !== self::STATE_CONNECTED) {
-            throw new InvalidOperationException('Cannot execute commands before connection');
-        }
-
         $method = [$this->pqConnection, 'notifyAsync'];
         $args = [$channel, $message];
 
         return $this->mutex->withLock(function() use($method, $args, $channel, $message) {
+            if ($this->getConnectionState() < self::STATE_OK) {
+                throw new InvalidOperationException('Cannot execute commands before connection');
+            }
+
             yield from $this->callAsyncPqMethodAndAwaitResult($method, $args);
 
             $this->getResultAndThrowIfNotOK();

@@ -19,9 +19,15 @@ interface Connection
     const OPTION_ENCODING           = 1;
     const OPTION_DEFAULT_FETCH_TYPE = 2;
 
-    const STATE_CLOSED     = 0;
-    const STATE_CONNECTING = 1;
-    const STATE_CONNECTED  = 2;
+    const STATE_NONE              = 0;
+    const STATE_STARTED           = 0b00000001;
+    const STATE_MADE              = 0b00000010;
+    const STATE_SSL_STARTUP       = 0b00000100;
+    const STATE_AUTH_OK           = 0b00001000;
+    const STATE_SETENV            = 0b00010000;
+    const STATE_AWAITING_RESPONSE = 0b00100000;
+    const STATE_OK                = 0b01000000;
+    const STATE_BAD               = 0b10000000;
 
     /**
      * Indicates whether the connection to the server is currently open

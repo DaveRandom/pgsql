@@ -13,14 +13,13 @@ class QueryStatement extends Statement implements PgsqlQueryStatement
 {
     public function execute(array $params = null): Promise
     {
-        // fixme: redundant check is redundant?
-        if ($this->connection->getConnectionState() !== PgsqlConnection::STATE_CONNECTED) {
-            throw new InvalidOperationException('Cannot execute commands before connection');
-        }
-
         return resolve(function() use($params) {
             /** @var Lock $lock */
             $lock = yield $this->mutex->getLock();
+
+            if ($this->connection->getConnectionState() < PgsqlConnection::STATE_OK) {
+                throw new InvalidOperationException('Cannot execute statement: invalid connection state');
+            }
 
             try {
                 yield from $this->connection->callAsyncPqMethodAndAwaitResult([$this->pqStatement, 'execAsync'], [$params]);
