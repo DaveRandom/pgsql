@@ -5,14 +5,14 @@ namespace Amp\Pgsql\pq;
 use Amp\Mutex\Lock;
 use Amp\Pgsql\Connection as PgsqlConnection;
 use Amp\Pgsql\Cursor as PgsqlCursor;
-use Amp\Pgsql\Exception;
+use Amp\Pgsql\Exceptions\InvalidOperationException;
 use Amp\Promise;
 use Amp\Success;
 use pq\Connection as pqConnection;
 use pq\Result as pqResult;
 use function Amp\resolve;
 
-class Cursor implements PgsqlCursor
+final class Cursor implements PgsqlCursor
 {
     private $connection;
     private $pqConnection;
@@ -51,13 +51,11 @@ class Cursor implements PgsqlCursor
 
     private function getReturnValueFromResult(pqResult $result, int $fetchStyle)
     {
-        if ($result->status === pqResult::SINGLE_TUPLE) {
-            return $result->fetchRow(self::$fetchStyleMap[$fetchStyle]);
-        } else if ($result->status === pqResult::TUPLES_OK) {
+        if ($result->status === pqResult::TUPLES_OK) {
             return null;
         }
 
-        throw new Exception($result->errorMessage, $result->status); //todo ex class
+        return $result->fetchRow(self::$fetchStyleMap[$fetchStyle]);
     }
 
     public function getConnection(): PgsqlConnection
@@ -91,9 +89,13 @@ class Cursor implements PgsqlCursor
         }
 
         if (!isset(self::$fetchStyleMap[$fetchStyle])) {
-            throw new Exception('Invalid fetch style number ' . $fetchStyle); //todo ex class
+            throw new InvalidOperationException('Invalid fetch style number ' . $fetchStyle);
         }
 
+        /* This looks like the wrong thing to do,  but the method that created the cursor needs to fetch the first
+           result from the wire so that it can throw when a the operation fails in some way.   It makes more sense
+           to me if we throw there than if we return what appears to be a valid cursor, only to have it throw when
+           attempting to get data from it. */
         if ($this->firstResult !== null) {
             $success = new Success($this->getReturnValueFromResult($this->firstResult, $fetchStyle));
             $this->firstResult = null;
@@ -105,9 +107,7 @@ class Cursor implements PgsqlCursor
             try {
                 yield from $this->connection->pollUntilNotBusy();
 
-                if (!$result = $this->pqConnection->getResult()) {
-                    throw new Exception('Failed to get a result'); //todo ex class
-                }
+                $result = $this->connection->getResultAndThrowIfNotOK();
 
                 return $this->getReturnValueFromResult($result, $fetchStyle);
             } catch (\Throwable $e) {
@@ -120,7 +120,7 @@ class Cursor implements PgsqlCursor
     public function close()
     {
         if ($this->closed) {
-            throw new \LogicException('Cannot close cursor: already closed'); // todo ex class?
+            throw new InvalidOperationException('Cannot close cursor: already closed');
         }
 
         $this->closed = true;

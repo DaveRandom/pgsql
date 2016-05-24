@@ -8,12 +8,21 @@ use Amp\Mutex\Mutex;
 use Amp\Mutex\QueuedExclusiveMutex;
 use Amp\Pgsql\Connection as PgsqlConnection;
 use Amp\Pgsql\Cursor as PgsqlCursor;
-use Amp\Pgsql\NotImplementedException;
-use Amp\Pgsql\OptionDefinitionFailureException;
-use Amp\Pgsql\UnknownOptionException;
+use Amp\Pgsql\Exceptions\CommandDispatchFailureException;
+use Amp\Pgsql\Exceptions\CommandErrorException;
+use Amp\Pgsql\Exceptions\ConnectFailureException;
+use Amp\Pgsql\Exceptions\InternalLogicErrorException;
+use Amp\Pgsql\Exceptions\InvalidOperationException;
+use Amp\Pgsql\Exceptions\NotImplementedException;
+use Amp\Pgsql\Exceptions\OptionDefinitionFailureException;
+use Amp\Pgsql\Exceptions\ResultFetchFailureException;
+use Amp\Pgsql\Exceptions\ServerProtocolViolationException;
+use Amp\Pgsql\Exceptions\UnexpectedResultStatusException;
+use Amp\Pgsql\Exceptions\UnknownOptionException;
 use Amp\Promise;
 use Amp\Success;
 use pq\Connection as pqConnection;
+use pq\Exception\RuntimeException as pqRuntimeException;
 use pq\Result as pqResult;
 use function Amp\any;
 use function Amp\cancel;
@@ -23,6 +32,7 @@ use function Amp\first;
 use function Amp\immediately;
 use function Amp\onReadable;
 use function Amp\onWritable;
+use function Amp\pipe;
 use function Amp\resolve;
 
 /**
@@ -98,6 +108,11 @@ class Connection implements PgsqlConnection
      */
     private $dsn;
 
+    /**
+     * @var string[]
+     */
+    private $notices = [];
+
     public function __construct(string $dsn, array $options = [])
     {
         $this->dsn = $dsn;
@@ -126,7 +141,7 @@ class Connection implements PgsqlConnection
     {
         assert(
             $this->writableDeferred === null,
-            new \LogicException('Cannot await writable from more than one source')
+            new InternalLogicErrorException('Cannot await writable from more than one source')
         );
 
         enable($this->writableWatcherID);
@@ -169,14 +184,15 @@ class Connection implements PgsqlConnection
      * so the caller can unlisten().
      *
      * @param string $id
-     * @return string|null
+     * @return null|string
+     * @throws \Amp\Pgsql\Exceptions\InvalidOperationException
      */
     private function unregisterChannelSubscription(string $id)
     {
         $channel = explode('_', $id, 2)[0];
 
         if (!isset($this->subscribedChannels[$channel][$id])) {
-            throw new \LogicException('Invalid channel listener ID'); //todo ex class
+            throw new InvalidOperationException('Invalid channel listener ID');
         }
 
         unset($this->subscribedChannels[$channel][$id]);
@@ -184,9 +200,48 @@ class Connection implements PgsqlConnection
         return isset($this->subscribedChannels[$channel]) ? $channel : null;
     }
 
+    private function prepare(string $name, string $sql, array $types = null)
+    {
+        if ($this->connectionState !== self::STATE_CONNECTED) {
+            throw new InvalidOperationException('Cannot execute commands before connection');
+        }
+
+        return $this->mutex->withLock(function() use($name, $sql, $types) {
+            $method = [$this->pqConnection, 'prepareAsync'];
+            $args = [$name, $sql, $types];
+
+            $stmt = yield from $this->callAsyncPqMethodAndAwaitResult($method, $args);
+
+            $this->getResultAndThrowIfNotOK();
+
+            return $stmt;
+        });
+    }
+
+    public function getResultAndThrowIfNotOK(): pqResult
+    {
+        if (!$result = $this->pqConnection->getResult()) {
+            throw new ResultFetchFailureException('Failed to get a result');
+        }
+
+        switch ($result->status) {
+            case pqResult::COMMAND_OK:
+            case pqResult::SINGLE_TUPLE:
+            case pqResult::TUPLES_OK:
+                return $result;
+            case pqResult::FATAL_ERROR:
+                throw new CommandErrorException($result->errorMessage, $result->status);
+            case pqResult::BAD_RESPONSE:
+                throw new ServerProtocolViolationException('Could not understand the server\'s response');
+        }
+
+        throw new UnexpectedResultStatusException('Unexpected result status number ' . $result->status, $result->status);
+    }
+
     public function callAsyncPqMethodAndAwaitResult(callable $method, array $args): \Generator
     {
         yield from $this->clearPendingResults();
+        $this->notices = [];
 
         $result = $method(...$args);
 
@@ -202,17 +257,21 @@ class Connection implements PgsqlConnection
             yield $this->awaitReadable();
 
             if (pqConnection::POLLING_FAILED === $this->pqConnection->poll()) {
-                throw new \RuntimeException($this->pqConnection->errorMessage); // todo ex class
+                throw new CommandDispatchFailureException($this->pqConnection->errorMessage);
             }
         }
     }
 
     public function flushUntilCommandSent(): \Generator
     {
-        while (!$this->pqConnection->flush()) {
-            if (self::IS_READABLE === yield $this->awaitReadableOrWritable()) {
-                $this->pqConnection->poll();
+        try {
+            while (!$this->pqConnection->flush()) {
+                if (self::IS_READABLE === yield $this->awaitReadableOrWritable()) {
+                    $this->pqConnection->poll();
+                }
             }
+        } catch (pqRuntimeException $e) {
+            throw new CommandDispatchFailureException($e->getMessage(), $e->getCode(), $e);
         }
     }
 
@@ -227,16 +286,13 @@ class Connection implements PgsqlConnection
     {
         assert(
             $this->readableDeferred === null,
-            new \LogicException('Cannot await readable from more than one source')
+            new InternalLogicErrorException('Cannot await readable from more than one source')
         );
 
         $this->readableDeferred = new Deferred();
         return $this->readableDeferred->promise();
     }
 
-    /**
-     * @return int
-     */
     public function getConnectionState(): int
     {
         return $this->connectionState;
@@ -253,7 +309,7 @@ class Connection implements PgsqlConnection
     public function close()
     {
         if ($this->pqConnection === null) {
-            throw new \LogicException('Cannot close connection: not open');
+            throw new InvalidOperationException('Cannot close connection: not open');
         }
 
         cancel($this->readableWatcherID);
@@ -262,18 +318,20 @@ class Connection implements PgsqlConnection
         $this->pqConnection = null;
     }
 
-    /**
-     * @return Promise
-     */
     public function connect(): Promise
     {
         if ($this->connectionState !== self::STATE_CLOSED) {
-            throw new \LogicException('Cannot connect: connection not closed');
+            throw new InvalidOperationException('Cannot connect: connection not closed');
         }
 
         $this->pqConnection = new pqConnection($this->dsn, pqConnection::ASYNC);
         $this->pqConnection->unbuffered = true;
         $this->pqConnection->nonblocking = true;
+
+        /** @noinspection PhpUnusedParameterInspection */
+        $this->pqConnection->on(pqConnection::EVENT_NOTICE, function(pqConnection $con, string $notice) {
+            $this->notices[] = $notice;
+        });
 
         $this->readableWatcherID = onReadable($this->pqConnection->socket, function() {
             if ($this->readableDeferred === null) {
@@ -287,9 +345,10 @@ class Connection implements PgsqlConnection
             $deferred->succeed(self::IS_READABLE);
         });
         $this->writableWatcherID = onWritable($this->pqConnection->socket, function() {
-            if ($this->writableDeferred === null) {
-                throw new \LogicException('Writable watcher invoked with no deferred??');
-            }
+            assert(
+                $this->writableDeferred !== null,
+                new InternalLogicErrorException('Writable watcher invoked with no deferred??')
+            );
 
             disable($this->writableWatcherID);
 
@@ -315,10 +374,10 @@ class Connection implements PgsqlConnection
                         break;
 
                     case pqConnection::POLLING_FAILED:
-                        throw new \RuntimeException($this->pqConnection->errorMessage); // todo ex class
+                        throw new ConnectFailureException($this->pqConnection->errorMessage);
 
                     default:
-                        throw new \RuntimeException('Unknown poll status: ' . $status); // todo ex class
+                        throw new ConnectFailureException('Unknown poll status: ' . $status);
                 }
             }
 
@@ -377,10 +436,15 @@ class Connection implements PgsqlConnection
         return $this->options[$option];
     }
 
+    public function getNotices(): array
+    {
+        return $this->notices;
+    }
+
     public function executeCommand(string $sql, array $params = null, array $types = null): Promise
     {
         if ($this->connectionState !== self::STATE_CONNECTED) {
-            throw new \LogicException('Cannot execute commands before connection');
+            throw new InvalidOperationException('Cannot execute commands before connection');
         }
 
         if ($params !== null) {
@@ -394,22 +458,14 @@ class Connection implements PgsqlConnection
         return $this->mutex->withLock(function() use($method, $args) {
             yield from $this->callAsyncPqMethodAndAwaitResult($method, $args);
 
-            if (!$result = $this->pqConnection->getResult()) {
-                throw new \RuntimeException('Failed to get a result'); //todo ex class
-            }
-
-            if ($result->status !== pqResult::COMMAND_OK) {
-                throw new \RuntimeException($result->errorMessage, $result->status); // todo ex class, handle warnings somehow
-            }
-
-            return $result->affectedRows;
+            return $this->getResultAndThrowIfNotOK()->affectedRows;
         });
     }
 
     public function executeQuery(string $sql, array $params = null, array $types = null): Promise
     {
         if ($this->connectionState !== self::STATE_CONNECTED) {
-            throw new \LogicException('Cannot execute commands before connection');
+            throw new InvalidOperationException('Cannot execute commands before connection');
         }
 
         if ($params !== null) {
@@ -427,13 +483,7 @@ class Connection implements PgsqlConnection
             try {
                 yield from $this->callAsyncPqMethodAndAwaitResult($method, $args);
 
-                if (!$result = $this->pqConnection->getResult()) {
-                    throw new \RuntimeException('Failed to get a result'); //todo ex class
-                }
-
-                if ($result->status !== pqResult::SINGLE_TUPLE && $result->status !== pqResult::TUPLES_OK) {
-                    throw new \RuntimeException($result->errorMessage, $result->status); //todo ex class, handle warnings somehow
-                }
+                $result = $this->getResultAndThrowIfNotOK();
 
                 return new Cursor($this, $this->pqConnection, $result, $lock);
             } catch (\Throwable $e) {
@@ -446,26 +496,20 @@ class Connection implements PgsqlConnection
     public function listen(string $channel, callable $callback): Promise
     {
         if ($this->connectionState !== self::STATE_CONNECTED) {
-            throw new \LogicException('Cannot execute commands before connection');
+            throw new InvalidOperationException('Cannot execute commands before connection');
         }
 
         if (isset($this->subscribedChannels[$channel])) {
             return new Success($this->registerChannelSubscription($channel, $callback));
         }
 
-        return $this->mutex->withLock(function() use($channel, $callback) {
-            $method = [$this->pqConnection, 'listenAsync'];
-            $args = [$channel, $this->channelNotificationHandler];
+        $method = [$this->pqConnection, 'listenAsync'];
+        $args = [$channel, $this->channelNotificationHandler];
 
+        return $this->mutex->withLock(function() use($method, $args, $channel, $callback) {
             yield from $this->callAsyncPqMethodAndAwaitResult($method, $args);
 
-            if (!$result = $this->pqConnection->getResult()) {
-                throw new \RuntimeException('Failed to get a result'); //todo ex class
-            }
-
-            if ($result->status !== pqResult::COMMAND_OK) {
-                throw new \RuntimeException($result->errorMessage, $result->status); // todo ex class, handle warnings somehow
-            }
+            $this->getResultAndThrowIfNotOK();
 
             return $this->registerChannelSubscription($channel, $callback);
         });
@@ -474,46 +518,30 @@ class Connection implements PgsqlConnection
     public function notify(string $channel, string $message): Promise
     {
         if ($this->connectionState !== self::STATE_CONNECTED) {
-            throw new \LogicException('Cannot execute commands before connection');
+            throw new InvalidOperationException('Cannot execute commands before connection');
         }
 
-        return $this->mutex->withLock(function() use($channel, $message) {
-            $method = [$this->pqConnection, 'notifyAsync'];
-            $args = [$channel, $message];
+        $method = [$this->pqConnection, 'notifyAsync'];
+        $args = [$channel, $message];
 
+        return $this->mutex->withLock(function() use($method, $args, $channel, $message) {
             yield from $this->callAsyncPqMethodAndAwaitResult($method, $args);
 
-            if (!$result = $this->pqConnection->getResult()) {
-                throw new \RuntimeException('Failed to get a result'); //todo ex class
-            }
-
-            if ($result->status !== pqResult::COMMAND_OK) {
-                throw new \RuntimeException($result->errorMessage, $result->status); // todo ex class, handle warnings somehow
-            }
+            $this->getResultAndThrowIfNotOK();
         });
     }
 
-    public function prepare(string $name, string $sql, array $types = null): Promise
+    public function prepareQuery(string $name, string $sql, array $types = null): Promise
     {
-        if ($this->connectionState !== self::STATE_CONNECTED) {
-            throw new \LogicException('Cannot execute commands before connection');
-        }
+        return pipe($this->prepare($name, $sql, $types), function($stmt) use($sql, $types) {
+            return new QueryStatement($this, $this->pqConnection, $stmt, $this->mutex, $sql, $types);
+        });
+    }
 
-        return $this->mutex->withLock(function() use($name, $sql, $types) {
-            $method = [$this->pqConnection, 'prepareAsync'];
-            $args = [$name, $sql, $types];
-
-            $stmt = yield from $this->callAsyncPqMethodAndAwaitResult($method, $args);
-
-            if (!$result = $this->pqConnection->getResult()) {
-                throw new \RuntimeException('Failed to get a result'); //todo ex class
-            }
-
-            if ($result->status !== pqResult::COMMAND_OK) {
-                throw new \RuntimeException($result->errorMessage, $result->status); // todo ex class, handle warnings somehow
-            }
-
-            return new Statement($this, $this->pqConnection, $stmt, $this->mutex, $sql, $types);
+    public function prepareCommand(string $name, string $sql, array $types = null): Promise
+    {
+        return pipe($this->prepare($name, $sql, $types), function($stmt) use($sql, $types) {
+            return new CommandStatement($this, $this->pqConnection, $stmt, $this->mutex, $sql, $types);
         });
     }
 
@@ -530,26 +558,20 @@ class Connection implements PgsqlConnection
     public function unlisten(string $subscriptionId): Promise
     {
         if ($this->connectionState !== self::STATE_CONNECTED) {
-            throw new \LogicException('Cannot execute commands before connection');
+            throw new InvalidOperationException('Cannot execute commands before connection');
         }
 
         if (!$channel = $this->unregisterChannelSubscription($subscriptionId)) {
             return new Success();
         }
 
-        return $this->mutex->withLock(function() use($channel) {
-            $method = [$this->pqConnection, 'unlistenAsync'];
-            $args = [$channel];
+        $method = [$this->pqConnection, 'unlistenAsync'];
+        $args = [$channel];
 
+        return $this->mutex->withLock(function() use($method, $args, $channel) {
             yield from $this->callAsyncPqMethodAndAwaitResult($method, $args);
 
-            if (!$result = $this->pqConnection->getResult()) {
-                throw new \RuntimeException('Failed to get a result'); //todo ex class
-            }
-
-            if ($result->status !== pqResult::COMMAND_OK) {
-                throw new \RuntimeException($result->errorMessage, $result->status); // todo ex class, handle warnings somehow
-            }
+            $this->getResultAndThrowIfNotOK();
         });
     }
 }
