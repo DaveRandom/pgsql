@@ -2,6 +2,8 @@
 
 namespace Amp\Pgsql;
 
+use Amp\Pgsql\Exceptions\CommandDispatchFailureException;
+use Amp\Pgsql\Exceptions\InvalidOperationException;
 use Amp\Promise;
 
 interface Statement

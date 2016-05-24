@@ -2,6 +2,10 @@
 
 namespace Amp\Pgsql;
 
+use Amp\Pgsql\Exceptions\InvalidOperationException;
+use Amp\Pgsql\Exceptions\ResultFetchFailureException;
+use Amp\Pgsql\Exceptions\ServerProtocolViolationException;
+use Amp\Pgsql\Exceptions\UnexpectedResultStatusException;
 use Amp\Promise;
 
 interface Cursor
@@ -23,6 +27,10 @@ interface Cursor
      *
      * @param int $fetchStyle
      * @return Promise<array>
+     * @throws InvalidOperationException
+     * @throws ResultFetchFailureException
+     * @throws ServerProtocolViolationException
+     * @throws UnexpectedResultStatusException
      */
     public function fetchAll(int $fetchStyle = self::FETCH_DEFAULT): Promise;
 
@@ -31,11 +39,17 @@ interface Cursor
      *
      * @param int $fetchStyle
      * @return Promise
+     * @throws InvalidOperationException
+     * @throws ResultFetchFailureException
+     * @throws ServerProtocolViolationException
+     * @throws UnexpectedResultStatusException
      */
     public function fetchRow(int $fetchStyle = self::FETCH_DEFAULT): Promise;
 
     /**
      * Close the cursor and free the associated connection for use
+     *
+     * @throws InvalidOperationException
      */
     public function close() /* : void */;
 }
