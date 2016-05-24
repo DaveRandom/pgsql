@@ -47,20 +47,8 @@ interface Statement
      * and enables the statement name to be reused.
      *
      * @return Promise<void>
+     * @throws InvalidOperationException
+     * @throws CommandDispatchFailureException
      */
     public function deallocate(): Promise;
-
-    /**
-     * Execute a command statement and return the number of affected rows
-     *
-     * @param array|null $params
-     * @return Promise<int>
-     */
-    public function executeCommand(array $params = null): Promise;
-
-    /**
-     * @param array|null $params
-     * @return Promise
-     */
-    public function executeQuery(array $params = null): Promise;
 }

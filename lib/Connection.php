@@ -31,8 +31,27 @@ interface Connection
      * Connect to the server
      *
      * @return Promise<void>
+     * @throws InvalidOperationException
+     * @throws ConnectFailureException
      */
     public function connect(): Promise;
+
+    /**
+     * Close the connection and free the underlying resources
+     *
+     * @throws InvalidOperationException
+     */
+    public function close() /* : void */;
+
+    /**
+     * Attempt to reset a possibly broken connection to a working state
+     *
+     * @return Promise<void>
+     * @throws ResetFailedException
+     * @throws InvalidOperationException
+     * @throws CommandDispatchFailureException
+     */
+    public function reset(): Promise;
 
     /**
      * Set an option on the connection
@@ -48,9 +67,8 @@ interface Connection
      * Get the current value of a connection option
      *
      * @param int $option
-     * @throws UnknownOptionException
-     * @throws OptionDefinitionFailureException
      * @return mixed
+     * @throws UnknownOptionException
      */
     public function getOption(int $option) /* : mixed */;
 
@@ -63,6 +81,8 @@ interface Connection
      * @param array $params
      * @param array $types
      * @return Promise<Cursor>
+     * @throws InvalidOperationException
+     * @throws CommandDispatchFailureException
      */
     public function executeQuery(string $sql, array $params = null, array $types = null): Promise;
 
@@ -75,26 +95,10 @@ interface Connection
      * @param array $params
      * @param array $types
      * @return Promise<int>
+     * @throws InvalidOperationException
+     * @throws CommandDispatchFailureException
      */
     public function executeCommand(string $sql, array $params = null, array $types = null): Promise;
-
-    /**
-     * Register a callback to be invoked when a notification is received on the named channel
-     *
-     * @param string $channel
-     * @param callable $callback function(string $message, int $pid): void
-     * @return Promise<string> An identifier for the listener
-     */
-    public function listen(string $channel, callable $callback): Promise;
-
-    /**
-     * Send a notification message to the named channel
-     *
-     * @param string $channel
-     * @param string $message
-     * @return Promise<void>
-     */
-    public function notify(string $channel, string $message): Promise;
 
     /**
      * Prepare a statement for execution
@@ -103,33 +107,58 @@ interface Connection
      * @param string $sql
      * @param array $types
      * @return Promise<Statement>
+     * @throws InvalidOperationException
+     * @throws CommandDispatchFailureException
      */
-    public function prepare(string $name, string $sql, array $types = null): Promise;
+    public function prepareQuery(string $name, string $sql, array $types = null): Promise;
 
     /**
-     * Attempt to reset a possibly broken connection to a working state
+     * Prepare a statement for execution
      *
-     * (pg_ping())
-     *
-     * @return Promise<void>
-     * @throws ResetFailedException
+     * @param string $name
+     * @param string $sql
+     * @param array $types
+     * @return Promise<Statement>
+     * @throws InvalidOperationException
+     * @throws CommandDispatchFailureException
      */
-    public function reset(): Promise;
+    public function prepareCommand(string $name, string $sql, array $types = null): Promise;
 
     /**
      * @param int $flags
      * @return Promise<void>
+     * @throws InvalidOperationException
+     * @throws CommandDispatchFailureException
      */
     public function beginTransaction(int $flags = 0): Promise;
 
     /**
+     * Register a callback to be invoked when a notification is received on the named channel
+     *
+     * @param string $channel
+     * @param callable $callback function(string $message, int $pid): void
+     * @return Promise<string> An identifier for the listener
+     * @throws InvalidOperationException
+     * @throws CommandDispatchFailureException
+     */
+    public function listen(string $channel, callable $callback): Promise;
+
+    /**
      * @param string $subscriptionId The ID returned by listen()
      * @return Promise<void>
+     * @throws InvalidOperationException
+     * @throws CommandDispatchFailureException
      */
     public function unlisten(string $subscriptionId): Promise;
 
     /**
-     * Close the connection and free the underlying resources
+     * Send a notification message to the named channel
+     *
+     * @param string $channel
+     * @param string $message
+     * @return Promise<void>
+     * @throws InvalidOperationException
+     * @throws CommandDispatchFailureException
      */
-    public function close() /* : void */;
+    public function notify(string $channel, string $message): Promise;
 }
