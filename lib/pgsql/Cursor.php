@@ -4,27 +4,28 @@ namespace Amp\Pgsql\pgsql;
 
 use Amp\Pgsql\Connection as PgsqlConnection;
 use Amp\Pgsql\Cursor as PgsqlCursor;
+use Amp\Pgsql\Exceptions\NotImplementedException;
 use Amp\Promise;
 
 class Cursor implements PgsqlCursor
 {
     public function getConnection(): PgsqlConnection
     {
-        // TODO: Implement getConnection() method.
+        throw new NotImplementedException; // todo
     }
 
     public function fetchAll(int $fetchStyle = PgsqlCursor::FETCH_ASSOC): Promise
     {
-        // TODO: Implement fetchAll() method.
+        throw new NotImplementedException; // todo
     }
 
     public function fetchRow(int $fetchStyle = PgsqlCursor::FETCH_ASSOC): Promise
     {
-        // TODO: Implement fetchRow() method.
+        throw new NotImplementedException; // todo
     }
 
     public function close()/*: void*/
     {
-        // TODO: Implement close() method.
+        throw new NotImplementedException; // todo
     }
 }
